@@ -1,0 +1,121 @@
+---
+title: "p8105_linear_model"
+author: "Ling"
+date: "11/16/2021"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(p8105.datasets)
+```
+
+# linear model 1/3: linear models
+
+## lecture
+
+- Schedule
+  - Bootstrapping + Iteration
+- Modeling and testing
+  - Linear regression: AR1
+  - GLM
+  - `lm` for linear models
+    - data, y, x
+    - clean up the output: `broom` package
+
+## practice
+```{r}
+set.seed(1)
+data("nyc_airbnb")
+nyc_airbnb = 
+  nyc_airbnb %>% 
+  mutate(stars = review_scores_location / 2) %>% 
+  rename(
+    borough = neighbourhood_group,
+    neighborhood = neighbourhood) %>% 
+  filter(borough != "Staten Island") 
+
+fit = lm(price ~ stars + borough, data = nyc_airbnb) #%>%
+  broom::tidy() %>%
+  # versus broom::glance()
+  select(term, estimate, p.value) %>% 
+  mutate(term = str_replace(term, "^borough", "Borough: ")) %>% 
+  knitr::kable(digits = 3)
+
+# residuals
+modelr::add_residuals(nyc_airbnb, fit) %>%
+  ggplot(aes(x = borough, y = resid)) + geom_violin() # skewed residuals
+  # make a residual plot
+modelr::add_predictions(nyc_airbnb, fit)
+```
+
+- hypothesis testing: type 3 analysis
+```{r}
+fit_null = lm(price ~ stars + borough, data = nyc_airbnb)
+fit_alt = lm(price ~ stars + borough + room_type, data = nyc_airbnb)
+```
+
+- nesting data & interaction
+```{r}
+nyc_airbnb %>% 
+  lm(price ~ stars * borough + room_type * borough, data = .) %>% 
+  broom::tidy() %>% 
+  knitr::kable(digits = 3)
+
+# versus
+
+nest_lm_res =
+  nyc_airbnb %>% 
+  nest(data = -borough) %>% 
+  mutate(
+    models = map(data, ~lm(price ~ stars + room_type, data = .x)), # notice the '.x'
+    results = map(models, broom::tidy)) %>% 
+  select(-data, -models) %>% 
+  unnest(results)
+
+# setup regression model based on different borough
+
+# restrict to manhattan
+
+manhattan_nest_lm_res =
+  nyc_airbnb %>% 
+  filter(borough == "Manhattan") %>% 
+  nest(data = -neighborhood) %>% 
+  mutate(
+    models = map(data, ~lm(price ~ stars + room_type, data = .x)),
+    results = map(models, broom::tidy)) %>% 
+  select(-data, -models) %>% 
+  unnest
+
+manhattan_nest_lm_res %>% 
+  filter(str_detect(term, "room_type")) %>% 
+  ggplot(aes(x = neighborhood, y = estimate)) + 
+  geom_point() + 
+  facet_wrap(~term) + 
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+```
+
+- mix model: random intercept and slope
+
+```{r}
+manhattan_airbnb %>% 
+  lme4::lmer(price ~ stars + room_type + (1 + room_type | neighborhood), data = .) %>% #neighborhood as random?
+  broom.mixed::tidy()
+```
+
+- logistic reg: using `glm` function
+```{r}
+fit_logistic = 
+  baltimore_df %>% 
+  glm(resolved ~ victim_age + victim_race + victim_sex, data = ., family = binomial()) 
+# notice the family: describing the distribution
+
+# tidying logistic reg output
+baltimore_df %>% 
+  modelr::add_predictions(fit_logistic) %>% 
+  mutate(fitted_prob = boot::inv.logit(pred))
+```
+
+
+
