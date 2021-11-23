@@ -115,7 +115,185 @@ fit_logistic =
 baltimore_df %>% 
   modelr::add_predictions(fit_logistic) %>% 
   mutate(fitted_prob = boot::inv.logit(pred))
+
+# R assumes the logit is important, so "inverse logit" is needed (`inv.logit`)
 ```
 
+# 2/3 cross validation
+## lecture
+
+- flexibility vs. fit: balance
+- prediction accuracy
+- cross validation: training set and testing set
+  - parameter: RMSE (root mean squared error)
+- refinements and variations
+- `modelr`
+  - `add_predictions()`
+  - `add_residuals()`
+  - `rmse()`
+  - `crossv_mc()`
+- `mgcv`
+
+## practice
+- cv by hand: `rmse`
+- CV iteratively
+  - `crossv_mc()`
+  - piece-wise linear model
+  
+# 3/3 Bootstrapping
+## lecture
+
+- extra topics
+  - shiny
+  - simulation/stat
+- Repeated sampling
+  - CLT
+  - repeated sampling on a computer --> bootstrapping (mimic repeated sampling)
+- Bootstrapping: repeated random sampling with replacement
+  - Pro: get the mean without assumption/large sample size
+  - replicate the thought process and draw out the real distribution --> correct claims of parameter distribution, not the p-values
+  - `modelr::bootstrap`
+- DDx
+  - Bootstrap vs. cross-validation
+    - Bootstrapping: inference on certain parameter
+    - Cross-validation: how well does the model work
+  - Bootstrap vs. Jackknife
+    - similar?
+
+## practice
+
+- Setup a simulation data set: n =250, linear relationship, x and error are nl distributed.
+```{r}
+n_samp = 250
+
+sim_df_const = 
+  tibble(
+    x = rnorm(n_samp, 1, 1),
+    error = rnorm(n_samp, 0, 1),
+    y = 2 + 3 * x + error
+  )
+
+# non-constant variance data, notice the error.
+sim_df_nonconst = sim_df_const %>% 
+  mutate(
+  error = error * .75 * x,
+  y = 2 + 3 * x + error
+)
+
+sim_df = 
+  bind_rows(const = sim_df_const, nonconst = sim_df_nonconst, .id = "data_source") 
+
+# const data vs. nonconst data
+sim_df %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point(alpha = .5) +
+  stat_smooth(method = "lm") +
+  facet_grid(~data_source) 
+
+# how linear regression model fits the 2 data?
+lm(y ~ x, data = sim_df_const) %>% 
+  broom::tidy() %>% 
+  knitr::kable(digits = 3)
+
+lm(y ~ x, data = sim_df_nonconst) %>% 
+  broom::tidy() %>% 
+  knitr::kable(digits = 3)
+```
+
+- get a bootstrap sample
+```{r}
+# first, write a function to bootstrap
+boot_sample = function(df) {
+  sample_frac(df, replace = TRUE, size = 1)
+}
+
+boot_sample(sim_df_nonconst) %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point(alpha = .5) +
+  stat_smooth
+
+boot_straps = 
+  tibble(
+    strap_number = 1:1000,
+    strap_sample = rerun(1000, boot_sample(sim_df_nonconst)) # note the rerun function
+  )
+
+bootstrap_results = boot_straps %>% 
+  mutate(
+    model = map(.x = strap_sample, ~lm(y ~ x, data = .x)),
+    result = map(model, broom::tidy)
+  ) %>% 
+  select(-strap_sample, -model) %>% 
+  unnest(result)
+
+lm(y~x, data = sim_df_nonconst) %>%
+  broom::tidy()
+# versus
+bootstrap_results %>% 
+  group_by(term) %>% 
+  summarize(boot_se = sd(estimate)) %>% 
+  knitr::kable(digits = 3)
+
+# get the 95% CI under bootstrappling
+bootstrap_results %>% 
+  group_by(term) %>% 
+  summarize(
+    ci_lower = quantile(estimate, 0.025), 
+    ci_upper = quantile(estimate, 0.975))
+```
+
+- `modelr::bootstrap`
+```{r}
+boot_straps = 
+  sim_df_nonconst %>% 
+  modelr::bootstrap(n = 1000)
+
+boot_straps$strap[[1]] %>%
+  as_tibble()
+
+# make the lines less using modelr::bootstrap
+sim_df_nonconst %>% 
+  modelr::bootstrap(n = 1000) %>% #note this new line
+  mutate(
+    models = map(strap, ~lm(y ~ x, data = .x) ),
+    results = map(models, broom::tidy)) %>% 
+  select(-strap, -models) %>% 
+  unnest(results) %>% 
+  group_by(term) %>% 
+  summarize(boot_se = sd(estimate))
+```
+
+- e.g. using air BNB data
+```{r}
+data("nyc_airbnb")
+
+nyc_airbnb = 
+  nyc_airbnb %>% 
+  mutate(stars = review_scores_location / 2) %>%
+  rename(
+    boro = neighbourhood_group,
+    neighborhood = neighbourhood) %>% 
+  filter(boro != "Staten Island") %>%
+  select(price, stars, boro, neighborhood, room_type)
+
+nyc_airbnb %>% 
+  ggplot(aes(x = stars, y = price, color = room_type)) + 
+  geom_point()
+# lots outliers
+
+# try manhattan using bootstrapping
+nyc_airbnb %>% 
+  filter(boro == "Manhattan") %>% 
+  modelr::bootstrap(n = 1000) %>% 
+  mutate(
+    models = map(strap, ~ lm(price ~ stars + room_type, data = .x)),
+    results = map(models, broom::tidy)) %>% 
+  select(results) %>% 
+  unnest(results) %>% 
+  filter(term == "stars") %>% 
+  ggplot(aes(x = estimate)) + geom_density()
+
+# notice the plot shows the distribution
+```
 
 
